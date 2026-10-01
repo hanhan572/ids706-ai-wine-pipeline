@@ -1,8 +1,0 @@
-pyproject.toml
-src/wine_pipeline/__init__.py
-src/wine_pipeline.egg-info/PKG-INFO
-src/wine_pipeline.egg-info/SOURCES.txt
-src/wine_pipeline.egg-info/dependency_links.txt
-src/wine_pipeline.egg-info/entry_points.txt
-src/wine_pipeline.egg-info/requires.txt
-src/wine_pipeline.egg-info/top_level.txt

@@ -1,2 +1,0 @@
-[console_scripts]
-wine-pipeline = wine_pipeline.cli:main
