@@ -1,31 +1,3 @@
----
-name: Wine pipeline plan
-overview: Redesign the wine-quality analysis as a single-container command-line package. The pipeline validates input, reports IQR outliers without deleting them, summarizes wine types, trains one linear regression model, and writes artifacts to a mounted output directory.
-todos:
-  - id: scaffold
-    content: Add packaging, gitignore, and the empty src/wine_pipeline package
-    status: pending
-  - id: validate-clean
-    content: Implement schema, load, validate, and duplicate removal with tests
-    status: pending
-  - id: outliers-summary
-    content: Implement IQR report that preserves every row, plus type summary and tests
-    status: pending
-  - id: model-viz
-    content: Implement linear regression, scatter plot, and tests
-    status: pending
-  - id: cli-pipeline
-    content: Orchestrate the pipeline, CLI, and integration tests that check artifacts
-    status: pending
-  - id: docker-docs
-    content: Add a single Dockerfile, .dockerignore, README, dataset file, and GitHub Actions. No Compose file.
-    status: pending
-  - id: verify
-    content: Run pytest for the required cases, the local smoke test, and single-container Docker execution verification
-    status: pending
-isProject: false
----
-
 # Wine Quality CLI Pipeline — Implementation Plan
 
 Save this document as `docs/plan.md` in the repository. It is the build specification. Implement from this file alone. Do not copy the previous monolithic script.
