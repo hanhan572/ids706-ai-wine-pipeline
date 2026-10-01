@@ -1,0 +1,503 @@
+---
+name: Wine pipeline plan
+overview: Redesign the wine-quality analysis as a single-container command-line package. The pipeline validates input, reports IQR outliers without deleting them, summarizes wine types, trains one linear regression model, and writes artifacts to a mounted output directory.
+todos:
+  - id: scaffold
+    content: Add packaging, gitignore, and the empty src/wine_pipeline package
+    status: pending
+  - id: validate-clean
+    content: Implement schema, load, validate, and duplicate removal with tests
+    status: pending
+  - id: outliers-summary
+    content: Implement IQR report that preserves every row, plus type summary and tests
+    status: pending
+  - id: model-viz
+    content: Implement linear regression, scatter plot, and tests
+    status: pending
+  - id: cli-pipeline
+    content: Orchestrate the pipeline, CLI, and integration tests that check artifacts
+    status: pending
+  - id: docker-docs
+    content: Add a single Dockerfile, .dockerignore, README, dataset file, and GitHub Actions. No Compose file.
+    status: pending
+  - id: verify
+    content: Run pytest for the required cases, the local smoke test, and single-container Docker execution verification
+    status: pending
+isProject: false
+---
+
+# Wine Quality CLI Pipeline — Implementation Plan
+
+Save this document as `docs/plan.md` in the repository. It is the build specification. Implement from this file alone. Do not copy the previous monolithic script.
+
+## Context
+
+Rebuild a wine-quality analysis as a small, modular, reproducible command-line pipeline for an IDS 706 software engineering assignment.
+
+- Repository directory: `/Users/wyhmac/Desktop/IDS706/ids706-ai-wine-pipeline`
+- Git remote: `https://github.com/hanhan572/ids706-ai-wine-pipeline.git`
+- The repository is empty apart from `.git`.
+- A previous analysis lives at `/Users/wyhmac/Desktop/IDS706/hw2/data_analysis.py`. Use it only to understand the dataset. Write new modules with new boundaries. Do not port its Polars benchmark, Rust notebook, or single-file `main()`.
+- Source CSV to copy into this repository: `/Users/wyhmac/Desktop/IDS706/hw2/data/wine_quality_merged.csv`
+- Dataset attribution: merged red and white wine quality data, previously used from the Kaggle dataset "Red and White Wine Quality" (`https://www.kaggle.com/datasets/amirmohamadrezaie/red-and-white-wine-quality`).
+
+Prior inspection of that same CSV, used only as a smoke-test sanity check:
+
+- 6,497 rows and 13 columns
+- 0 missing values
+- 1,177 exact duplicate rows
+- 5,320 rows after duplicate removal
+- about 1,359 red rows and 3,961 white rows after duplicate removal
+
+Unit tests must use synthetic frames. They must not assert those full-file counts.
+
+## Locked technical decisions
+
+1. **Single-container command-line application.** One Python process, one `Dockerfile`, started with `docker build` and `docker run`. Do not add Docker Compose, a database, a web server, an API, or a second container.
+2. **Outliers are reported and preserved.** Extreme physicochemical measurements may be legitimate wines. Compute IQR outlier counts and write them to `outliers_report.csv`. Preserve every observation. Do not drop, clip, impute, or down-weight outlier rows. The summary, plot, and model use the rows that remain after duplicate removal. `rows_modeled` must equal `rows_after_dedup`.
+
+## 1. Project requirements
+
+Build one command-line program that reads a merged red/white wine CSV and writes analysis artifacts. Python 3.12. Runtime dependencies: `pandas`, `matplotlib`, `scikit-learn`. Test dependency: `pytest`. Leave versions unpinned in `requirements.txt`, matching a simple course install.
+
+### Input contract
+
+The CSV must contain exactly these 13 columns. Names contain spaces. Keep the names as they appear.
+
+Numeric features:
+
+- `fixed acidity`
+- `volatile acidity`
+- `citric acid`
+- `residual sugar`
+- `chlorides`
+- `free sulfur dioxide`
+- `total sulfur dioxide`
+- `density`
+- `pH`
+- `sulphates`
+- `alcohol`
+
+Target: `quality`
+
+Category: `type`, with values `red` and `white` after stripping whitespace and lowercasing.
+
+A missing required column, an unexpected extra column, a non-numeric feature or `quality` value, or any missing required value is a hard error. Do not impute.
+
+### Pipeline order
+
+1. Resolve `--input`. A missing path raises `FileNotFoundError`.
+2. Read the CSV and strip whitespace from column names.
+3. Require the column set to equal the 13 required names.
+4. Coerce the 11 features and `quality` to numeric. A value that cannot be coerced raises `ValueError` naming the column.
+5. Count missing values per required column. If the total is greater than zero, raise `ValueError` listing each column and its missing count.
+6. Remove exact duplicate rows, reset the index, and record how many rows were removed.
+7. If fewer than 10 rows remain, raise `ValueError` and write no artifacts. An empty data section (header only, or zero rows) fails at this rule or at an explicit empty-frame check, whichever runs first, and still writes nothing.
+8. Build an IQR report for every numeric column, including `quality`. Default multiplier is `1.5`. The caller's row count stays unchanged.
+9. Summarize by wine type.
+10. Fit and evaluate `sklearn.linear_model.LinearRegression`.
+11. Create `--output-dir` if needed, then write every artifact. Hold results in memory until this step so a failed run does not leave `metrics.json`.
+
+### Model
+
+- Features: the 11 numeric physicochemical columns.
+- Target: `quality`.
+- Exclude `type` from the feature matrix.
+- `train_test_split` with default `test_size=0.2` and `random_state=42`.
+- Metrics: mean absolute error and R-squared on the test split.
+- Reject `test_size` outside the open interval `(0, 1)`.
+- Reject `iqr_multiplier` less than or equal to 0.
+
+### Command-line interface
+
+Both of these invoke the same `main`:
+
+- `wine-pipeline`
+- `python -m wine_pipeline`
+
+```bash
+wine-pipeline \
+  --input data/wine_quality_merged.csv \
+  --output-dir output \
+  --test-size 0.2 \
+  --random-state 42 \
+  --iqr-multiplier 1.5
+```
+
+| Argument | Required | Default | Rule |
+| --- | --- | --- | --- |
+| `--input` | yes | none | Path to the CSV |
+| `--output-dir` | yes | none | Directory to create and write |
+| `--test-size` | no | `0.2` | Float in `(0, 1)` |
+| `--random-state` | no | `42` | Integer |
+| `--iqr-multiplier` | no | `1.5` | Float greater than 0 |
+
+Exit code `0` on success. Exit code `1` on `FileNotFoundError` or `ValueError`. Print a short success line to stdout with rows read, duplicates removed, MAE, R-squared, and the output directory. Print errors to stderr.
+
+### Artifacts
+
+Write these five files inside `--output-dir`, and only after the run succeeds.
+
+`summary.csv` columns, sorted by `type`:
+
+- `type`
+- `count`
+- `average_quality`
+- `median_quality`
+- `average_alcohol`
+- `high_quality_count` (rows with `quality >= 7`; the threshold is fixed)
+
+`missing_values.csv` columns, one row per required column in the schema order:
+
+- `column`
+- `missing_count`
+
+`outliers_report.csv` columns, one row per numeric column in schema order (11 features, then `quality`):
+
+- `column`
+- `q1`
+- `q3`
+- `iqr`
+- `lower_fence`
+- `upper_fence`
+- `outlier_count`
+
+IQR definition for each numeric series:
+
+- `q1` = 25th percentile
+- `q3` = 75th percentile
+- `iqr` = `q3 - q1`
+- `lower_fence` = `q1 - multiplier * iqr`
+- `upper_fence` = `q3 + multiplier * iqr`
+- A value is an outlier when it is strictly less than `lower_fence` or strictly greater than `upper_fence`.
+- A zero IQR is valid. Fences equal that constant and `outlier_count` is 0. Do not divide by IQR.
+
+`metrics.json` keys:
+
+- `rows_read` (int)
+- `rows_after_dedup` (int)
+- `duplicates_removed` (int)
+- `missing_values_total` (int)
+- `outlier_count_total` (int; sum of per-column counts, so one row can contribute to more than one column)
+- `rows_modeled` (int; must equal `rows_after_dedup`)
+- `test_size` (float)
+- `random_state` (int)
+- `iqr_multiplier` (float)
+- `n_train` (int)
+- `n_test` (int)
+- `mae` (float)
+- `r2` (float)
+
+`alcohol_vs_quality.png`: a scatter plot of `alcohol` versus `quality` with axis labels "Alcohol Content" and "Wine Quality" and a title "Alcohol Content vs Wine Quality". The file must be non-empty.
+
+### Out of scope
+
+Docker Compose, databases, web servers, extra containers, Polars benchmarks, imputation, outlier deletion, multiple models, and hyperparameter search.
+
+## 2. Repository structure
+
+```text
+ids706-ai-wine-pipeline/
+├── pyproject.toml
+├── requirements.txt
+├── README.md
+├── Dockerfile
+├── .dockerignore
+├── .gitignore
+├── docs/
+│   └── plan.md
+├── .github/workflows/tests.yml
+├── data/
+│   └── wine_quality_merged.csv
+├── src/wine_pipeline/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── cli.py
+│   ├── schema.py
+│   ├── load.py
+│   ├── validate.py
+│   ├── clean.py
+│   ├── outliers.py
+│   ├── summarize.py
+│   ├── visualize.py
+│   ├── model.py
+│   └── pipeline.py
+└── tests/
+    ├── conftest.py
+    ├── test_load.py
+    ├── test_validate.py
+    ├── test_clean.py
+    ├── test_outliers.py
+    ├── test_summarize.py
+    ├── test_model.py
+    ├── test_visualize.py
+    └── test_pipeline.py
+```
+
+`.gitignore` must ignore `output/`, `output-docker/`, `.venv/`, `__pycache__/`, `.pytest_cache/`, `*.pyc`, and `.DS_Store`.
+
+`requirements.txt` lists `pandas`, `matplotlib`, `scikit-learn`, and `pytest`.
+
+`pyproject.toml`:
+
+- Project name `wine-pipeline`
+- `requires-python = ">=3.12"`
+- Runtime dependencies: pandas, matplotlib, scikit-learn
+- Package discovery under `src`
+- Script: `wine-pipeline = wine_pipeline.cli:main`
+
+## 3. Responsibilities and contracts
+
+Keep functions pure where possible: data in, data or a path out. Share column names only through `schema.py`.
+
+### `src/wine_pipeline/schema.py`
+
+Constants:
+
+- `REQUIRED_COLUMNS`: the 13 names in the order listed in the input contract
+- `FEATURE_COLUMNS`: the 11 numeric features in that same order
+- `NUMERIC_COLUMNS`: `FEATURE_COLUMNS` plus `quality`
+- `TARGET_COLUMN = "quality"`
+- `TYPE_COLUMN = "type"`
+- `MIN_ROWS = 10`
+- `HIGH_QUALITY_THRESHOLD = 7`
+
+### `src/wine_pipeline/load.py`
+
+`load_data(path: str | Path) -> pandas.DataFrame`
+
+- Convert `path` to `Path`.
+- Raise `FileNotFoundError` with the path in the message when the file is absent.
+- Read it with `pandas.read_csv`.
+- Strip column-name whitespace.
+- Return the frame. Schema checks belong in `validate.py`.
+
+### `src/wine_pipeline/validate.py`
+
+`validate_columns(df) -> None`
+
+- Compare `set(df.columns)` with `set(REQUIRED_COLUMNS)`.
+- Missing names raise `ValueError` starting with `Missing required columns:` and listing the sorted names.
+- Extra names raise `ValueError` starting with `Unexpected columns:` and listing the sorted names.
+
+`validate_numeric(df) -> pandas.DataFrame`
+
+- Return a copy.
+- For each name in `NUMERIC_COLUMNS`, coerce with `pandas.to_numeric(..., errors="coerce")` only after checking that every original non-null value coerced. If any non-null value becomes null, raise `ValueError` naming that column (`Non-numeric values in column: {name}`).
+- Leave true missing values as missing so the missing-value check can count them.
+
+`missing_value_report(df) -> pandas.DataFrame`
+
+- Columns `column` and `missing_count`.
+- One row per `REQUIRED_COLUMNS` entry, in schema order, using `isna().sum()`.
+
+`validate_no_missing(report) -> None`
+
+- If any `missing_count` is positive, raise `ValueError` starting with `Missing values found:` and include each affected `column=count` pair.
+
+### `src/wine_pipeline/clean.py`
+
+`remove_duplicates(df) -> tuple[pandas.DataFrame, int]`
+
+- Count exact duplicate rows with `duplicated().sum()` before dropping.
+- Return `drop_duplicates().reset_index(drop=True)` and that count.
+- Do not consider near-duplicates.
+
+### `src/wine_pipeline/outliers.py`
+
+`build_outlier_report(df, multiplier: float = 1.5) -> pandas.DataFrame`
+
+- Raise `ValueError` if `multiplier <= 0`.
+- Return only the report defined above.
+- Do not add a drop flag and do not return a filtered frame.
+- Do not modify the caller's row count. The pipeline keeps using the deduplicated frame.
+
+### `src/wine_pipeline/summarize.py`
+
+`summarize_by_type(df) -> pandas.DataFrame`
+
+- Group on `type` after `str.strip().str.lower()`.
+- Aggregations: `count`, mean of `quality` as `average_quality`, median of `quality` as `median_quality`, mean of `alcohol` as `average_alcohol`, and `high_quality_count` for `quality >= 7`.
+- Sort by `type` and reset the index so `type` is a column.
+
+### `src/wine_pipeline/model.py`
+
+`train_and_evaluate(df, test_size: float = 0.2, random_state: int = 42) -> dict`
+
+- Raise `ValueError` if `test_size` is outside `(0, 1)`.
+- Raise `ValueError` if `len(df) < MIN_ROWS`. Message includes the minimum and the actual count.
+- `X` is `FEATURE_COLUMNS` only. `y` is `quality`.
+- Fit `LinearRegression` on the training split.
+- Return a dict with `mae`, `r2`, `n_train`, and `n_test`.
+- No file I/O and no plotting.
+
+### `src/wine_pipeline/visualize.py`
+
+`create_scatter_plot(df, output_path: str | Path) -> Path`
+
+- Set Matplotlib to the `Agg` backend before importing `pyplot`.
+- Create the parent directory if needed.
+- Save the scatter plot specified above and close the figure.
+- Return the output path.
+
+### `src/wine_pipeline/pipeline.py`
+
+`run_pipeline(input_path, output_dir, test_size=0.2, random_state=42, iqr_multiplier=1.5) -> dict`
+
+Order: `load_data`, `validate_columns`, `validate_numeric`, `missing_value_report`, `validate_no_missing`, `remove_duplicates`, minimum-row check, `build_outlier_report`, `summarize_by_type`, `train_and_evaluate`, `create_scatter_plot`, then write `summary.csv`, `missing_values.csv`, `outliers_report.csv`, and `metrics.json`.
+
+On any exception before the write step, leave the output directory without a new `metrics.json` from this run. Creating the directory can happen at the start of the write step.
+
+Return a dict that includes the artifact paths and the metric fields.
+
+### `src/wine_pipeline/cli.py`
+
+`main(argv: list[str] | None = None) -> int`
+
+- Parse the arguments in the CLI table.
+- Call `run_pipeline`.
+- Catch `FileNotFoundError` and `ValueError`, print the exception to stderr, and return `1`.
+- On success print one short summary to stdout and return `0`.
+
+### `src/wine_pipeline/__main__.py`
+
+Call `cli.main()` and pass its return code to `raise SystemExit`.
+
+### `tests/conftest.py`
+
+Provide a `sample_wine_df` fixture with at least 10 rows, both `red` and `white`, all 13 columns, unique rows, and no missing values. Provide small helpers or extra fixtures for a duplicated row, a missing value, and one extreme `alcohol` value. Tests that need fewer than 10 rows should slice this fixture.
+
+### `README.md`
+
+Include:
+
+- Project purpose and the two locked decisions, in plain language
+- Dataset source link and column list
+- Local setup: Python 3.12 virtual environment, `pip install -r requirements.txt`, `pip install -e .`
+- CLI example
+- `python -m pytest`
+- Docker build and the single `docker run` command from section 5
+- A short description of each output file
+- The statement that IQR outliers are counted and retained because extreme measurements may be legitimate wines
+
+### `.github/workflows/tests.yml`
+
+One job on `ubuntu-latest`, triggered by push to `main` and by pull requests. Steps: checkout, Python 3.12, install dependencies, editable install, `python -m pytest`. This workflow does not build the Docker image.
+
+## 4. Implementation sequence
+
+1. Add `pyproject.toml`, `requirements.txt`, `.gitignore`, and an installable empty `src/wine_pipeline` package. Confirm `pip install -e .` works.
+2. Add `schema.py`, `load.py`, and `validate.py`, plus `test_load.py` and `test_validate.py`.
+3. Add `clean.py` and `test_clean.py`.
+4. Add `outliers.py` and `test_outliers.py`. Confirm the report does not change the caller's row count.
+5. Add `summarize.py`, `model.py`, and their tests, including the identical-seed reproducibility test and the under-10-row failure.
+6. Add `visualize.py` and a test that writes a non-empty PNG under `tmp_path`.
+7. Add `pipeline.py`, `cli.py`, and `__main__.py`. Integration tests must cover success artifacts, a missing file, a missing column, duplicates recorded in `metrics.json`, an empty CSV, and a dataset under 10 rows.
+8. Copy `wine_quality_merged.csv` into `data/`. Do not import anything from the `hw2` tree.
+9. Add `Dockerfile`, `.dockerignore`, and `README.md`.
+10. Add the GitHub Actions workflow.
+11. Run the verification checklist in section 9, including the manual Docker run.
+
+## 5. Docker and containerization
+
+One container. One process. No `docker-compose.yml`.
+
+Image requirements:
+
+- Base image `python:3.12-slim`
+- Environment: `PYTHONDONTWRITEBYTECODE=1`, `PYTHONUNBUFFERED=1`, `MPLBACKEND=Agg`, `MPLCONFIGDIR=/tmp`
+- Working directory `/app`
+- Copy `pyproject.toml`, `requirements.txt`, and `src/`
+- Install with `pip install --no-cache-dir .`
+- `ENTRYPOINT ["wine-pipeline"]`
+- Do not copy `data/`, `tests/`, or `output/` into the image
+
+`.dockerignore` excludes `.git`, `.venv`, `venv`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `output`, `output-docker`, `tests`, `*.pyc`, and `.DS_Store`.
+
+Host command:
+
+```bash
+docker build -t wine-pipeline .
+
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/data:/data:ro" \
+  -v "$(pwd)/output:/output" \
+  wine-pipeline \
+  --input /data/wine_quality_merged.csv \
+  --output-dir /output
+```
+
+The data mount is read-only. Artifacts are written only to the output mount. Passing the host user id keeps those files owned by the host user. `MPLCONFIGDIR=/tmp` lets Matplotlib run when that user has no home directory in the container.
+
+## 6. Design risks
+
+- Residual sugar and sulfur dioxide are skewed, so IQR counts can be large. That is expected. Those rows stay in the summary and the model. Filtering on the report would violate the locked decision.
+- `quality` is an integer score. Linear regression treats it as continuous. MAE near half a point and R-squared well below 1 are acceptable descriptive results.
+- Duplicate removal is exact row equality only.
+- A red-only or white-only UCI file fails validation because `type` is absent, or because the column set does not match.
+- Set the Matplotlib `Agg` backend before importing `pyplot`. Otherwise the container run fails with no display.
+- Running the container as root would leave root-owned files on the host. The documented command uses `--user "$(id -u):$(id -g)"`.
+- Write artifacts only after every computation succeeds, so a later failure cannot leave a successful-looking `metrics.json`.
+- MAE and R-squared change when `random_state` or `test_size` changes. Defaults remain `42` and `0.2`, and both are stored in `metrics.json`.
+- Do not hardcode the 6,497-row smoke-test counts inside unit tests.
+
+## 7. Testing strategy
+
+Run `python -m pytest` from the repository root after `pip install -e .`. Use `tmp_path` for files. Do not use the network. Do not read `data/wine_quality_merged.csv` in unit tests.
+
+### Required cases
+
+**Missing input file.** `test_load_missing_file` expects `FileNotFoundError`. `test_pipeline_missing_file` calls `run_pipeline` with a path under `tmp_path` that does not exist, expects `FileNotFoundError`, and asserts `metrics.json` was not created.
+
+**Missing required column.** `test_validate_missing_column` drops `quality` or `type` and expects `ValueError` whose message contains `Missing required columns:` and the column name. `test_pipeline_missing_column` writes a temporary CSV without `type`, expects `ValueError`, and asserts `metrics.json` was not created.
+
+**Duplicate-row handling.** `test_remove_duplicates_drops_exact_copies` repeats one row, expects a duplicate count of 1, unique remaining rows, and unchanged values in the kept row. `test_remove_duplicates_keeps_unique_rows` expects a count of 0. `test_pipeline_records_duplicate_count` runs the pipeline on a temporary CSV that contains one duplicated row and at least 10 rows after cleaning, then asserts `metrics.json` field `duplicates_removed` is 1 and `rows_modeled == rows_after_dedup`.
+
+**Empty-result or small-dataset case.** `test_pipeline_empty_csv` writes a CSV with the 13-column header and zero data rows, expects `ValueError`, and asserts `metrics.json` was not created. `test_train_rejects_small_dataset` passes fewer than 10 valid rows and expects `ValueError`. `test_pipeline_small_dataset_writes_nothing` does the same through `run_pipeline` and asserts `metrics.json` was not created.
+
+**Output-file creation checks.** `test_pipeline_writes_all_artifacts` uses a valid temporary CSV with at least 10 rows and a missing output directory. Assert the directory is created and these files exist and are non-empty: `summary.csv`, `metrics.json`, `missing_values.csv`, `outliers_report.csv`, `alcohol_vs_quality.png`. Assert `outliers_report.csv` has one row per numeric column. Assert `rows_modeled` equals `rows_after_dedup`.
+
+**Model reproducibility.** `test_model_reproducible` calls `train_and_evaluate` twice with `test_size=0.2` and `random_state=42`. `mae`, `r2`, `n_train`, and `n_test` must match exactly.
+
+**Docker execution verification.** This is a required manual check, not a pytest, so GitHub Actions does not need a Docker daemon. Use the commands in section 5 and the procedure in section 8. Pass criteria: image builds, container exit code is 0, the five artifacts appear on the host, `outliers_report.csv` is non-empty, and the host user owns the files. There is no Compose file.
+
+### Additional cases
+
+- `test_validate_non_numeric_feature`: `alcohol` set to `"high"` raises `ValueError` naming that column.
+- `test_validate_missing_value`: one NaN in `pH` produces a report count of 1 and `validate_no_missing` raises `ValueError`. The pipeline version asserts `metrics.json` is absent.
+- `test_outlier_constant_column`: a constant numeric column yields `outlier_count` 0 and does not raise.
+- `test_outlier_extreme_value_is_kept`: one extreme `alcohol` increases that column's outlier count, and the frame length passed into the report equals the frame length after the call.
+- `test_summarize_both_types` and `test_summarize_single_type`: expected group counts on the fixture; a single type yields one summary row.
+- `test_cli_rejects_bad_test_size` and `test_outlier_rejects_non_positive_multiplier`.
+- `test_scatter_plot_creates_file`: PNG exists and has size greater than 0.
+
+## 8. Manual smoke-test procedure
+
+From `/Users/wyhmac/Desktop/IDS706/ids706-ai-wine-pipeline` after `pip install -e .`:
+
+1. Run `python -m pytest -q` and confirm the suite passes.
+2. Run `python -m wine_pipeline --input data/wine_quality_merged.csv --output-dir output`.
+3. Confirm exit code 0 and non-empty files: `output/summary.csv`, `output/metrics.json`, `output/missing_values.csv`, `output/outliers_report.csv`, `output/alcohol_vs_quality.png`.
+4. Confirm every `missing_count` is 0. Confirm `duplicates_removed` is 1177, `rows_after_dedup` is 5320, and `rows_modeled` equals `rows_after_dedup`. Confirm `summary.csv` has one red row and one white row. These counts are sanity checks for this CSV, not unit-test oracles.
+5. Confirm the PNG has the specified axis labels and more than one point.
+6. Rerun the same command. Confirm `mae` and `r2` are unchanged.
+7. Run the CLI with `--input data/does-not-exist.csv --output-dir output` and confirm exit code 1.
+8. Docker execution verification: `docker build -t wine-pipeline .`, then the `docker run` command from section 5 with the output mount pointed at a fresh `output-docker/` directory. Confirm exit code 0, the same five files on the host, a non-empty `outliers_report.csv`, and host-user ownership. Do not use Docker Compose.
+
+## 9. Verification checklist
+
+- The application is one CLI process in one container. The repo has a `Dockerfile` and does not contain `docker-compose.yml`, a database client, or a web framework.
+- `wine-pipeline --help` and `python -m wine_pipeline --help` both work after an editable install.
+- Pytest covers a missing input file, a missing required column, duplicate-row handling, an empty CSV, and a dataset under 10 rows.
+- Pytest checks that a successful run creates all five output files and that a failed run does not create `metrics.json`.
+- Pytest shows two model runs with the same `random_state` produce the same MAE, R-squared, and split sizes.
+- Outlier rows are counted in `outliers_report.csv` and preserved. `rows_modeled` equals `rows_after_dedup`.
+- `summary.csv` contains `type`, `count`, `average_quality`, `median_quality`, `average_alcohol`, and `high_quality_count`.
+- `metrics.json` contains the keys listed in section 1.
+- The full CSV smoke test completes locally with 0 missing values, 1177 duplicates removed, and 5320 modeled rows.
+- Docker execution verification passes with mounted volumes. The image build context does not copy `output/`.
+- `.dockerignore` excludes `.git`, virtualenvs, caches, tests, and `output`.
+- `README.md` documents setup, the CLI, pytest, and the single-container Docker command, plus the dataset source and the outlier-retention rule.
+- `.github/workflows/tests.yml` runs pytest on push to `main` and on pull requests.
+- Application code is new modules under `src/wine_pipeline/`. It is not a copy of `/Users/wyhmac/Desktop/IDS706/hw2/data_analysis.py`.
