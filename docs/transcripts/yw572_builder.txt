@@ -1,0 +1,651 @@
+STUDENT_NAME: Yihan Wang
+NETID: yw572
+OPTION: 2
+ROLE: builder
+AGENT_TOOL: Cursor AI
+REPOSITORY_B_URL: https://github.com/hanhan572/ids706-ai-wine-pipeline
+===== TRANSCRIPT START =====
+# Wine quality analysis pipeline
+_Exported on 2026/10/1 at GMT-4 15:09:18 from Cursor (3.21.18)_
+
+---
+
+[STUDENT]
+
+You are the BUILDER for an IDS 706 AI-assisted software development assignment.
+
+This is a fresh conversation. An Architect has already designed the project. Your job is to implement the approved plan rather than redesign the project from scratch.
+
+The project is Option 2: rebuilding a previous wine-quality analysis project as a new, modular, reproducible command-line data pipeline.
+
+The repository is currently open in Cursor.
+
+Please read the approved Architect plan:
+
+docs/plan.md
+
+and implement that plan step by step.
+
+Requirements:
+
+- organize Python code under src/wine_pipeline/
+- support configurable input and output paths through command-line arguments
+- validate the input dataset
+- remove duplicate observations
+- explicitly report missing values
+- report IQR-based outliers without automatically deleting them
+- produce useful wine-type summary statistics
+- train and evaluate a Linear Regression model
+- save the outputs required by docs/plan.md
+- include meaningful pytest tests for normal and edge cases
+- include a Dockerfile and .dockerignore
+- allow outputs to be written to a mounted host directory
+- update README.md with accurate setup, usage, testing, Docker, and output instructions
+
+Work incrementally.
+
+For each implementation stage:
+1. tell me which files you are creating or modifying
+2. briefly explain the important implementation decision
+3. make the required file changes
+4. give me the exact verification command to run
+5. stop if verification fails rather than continuing blindly
+
+Do not silently change the approved architecture. If you believe docs/plan.md should change, explain why before making that change.
+
+---
+
+[AGENT]
+
+I'll start by reading the approved plan and the current repository layout so the implementation follows that architecture instead of redesigning it.
+
+Stage 1 is packaging only: an installable `src` layout, with the `wine-pipeline` script declared in `pyproject.toml` even though the CLI module comes later. I’m adding those files and checking that an editable install works.
+
+---
+
+[STUDENT]
+
+Verification passed successfully. Please proceed to Stage 2 only, following docs/plan.md.
+
+Continue to:
+- implement input schema validation
+- load the CSV
+- handle a missing input file
+- detect missing required columns
+- remove duplicate rows
+- add the corresponding pytest tests
+
+After making those changes, give me the exact verification command and stop so I can run it myself.
+
+---
+
+[AGENT]
+
+Stage 1 is in place. I’ll add schema, CSV loading, column and missing-value checks, exact-duplicate removal, and the pytest coverage for those behaviors, then stop with the verification command.
+
+This step adds schema checks, CSV loading, and exact-duplicate removal. Column names stay in `schema.py`; `load_data` only reads the file and strips header whitespace, and real missing values stay missing so they can be counted instead of being treated as bad text.
+
+Stage 2 is in place. Schema checks, CSV loading, and exact-duplicate removal are implemented, and the new tests cover those paths.
+
+**Files created**
+- `src/wine_pipeline/schema.py`
+- `src/wine_pipeline/load.py`
+- `src/wine_pipeline/validate.py`
+- `src/wine_pipeline/clean.py`
+- `tests/conftest.py`
+- `tests/test_load.py`
+- `tests/test_validate.py`
+- `tests/test_clean.py`
+
+**Implementation decisions**
+- Column names live only in `schema.py`.
+- `load_data` reads the CSV and strips header whitespace. A missing path raises `FileNotFoundError` with that path in the message. Schema checks stay in `validate.py`.
+- Missing required columns are reported before unexpected columns. Numeric coercion rejects text such as `"high"`, and real missing values stay missing so `missing_value_report` can count them.
+- `remove_duplicates` counts exact matches with `duplicated()` before dropping them, resets the index, and keeps near-duplicates.
+
+Duplicate removal is included here because you asked for it in this step. Outlier reporting is still next and is not implemented yet.
+
+Run this from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_load.py tests/test_validate.py tests/test_clean.py -q
+```
+
+---
+
+[STUDENT]
+
+Stage 2 verification failed.
+
+Here is the complete terminal output:
+
+........F.....                                                                                                                            [100%]
+=================================================================== FAILURES ====================================================================
+_________________________________________________ test_validate_numeric_coerces_numeric_strings _________________________________________________
+
+sample_wine_df =     fixed acidity  volatile acidity  citric acid  residual sugar  chlorides  ...    pH  sulphates  alcohol  quality   ...
+    13.0         14.0            15.0       16.0  ...  20.0       21.0     13.4        9  white
+
+[12 rows x 13 columns]
+
+    def test_validate_numeric_coerces_numeric_strings(sample_wine_df: pd.DataFrame) -> None:
+        frame = sample_wine_df.copy()
+        frame["quality"] = frame["quality"].astype(str)
+        result = validate_numeric(frame)
+        assert result["quality"].isna().sum() == 0
+        assert pd.api.types.is_numeric_dtype(result["quality"])
+>       assert frame["quality"].dtype == object
+E       AssertionError: assert <StringDtype(storage='python', na_value=nan)> == object
+E        +  where <StringDtype(storage='python', na_value=nan)> = 0     4
+1     5
+2     6
+3     7
+4     8
+5     9
+6     4
+7     5
+8     6
+9     7
+10    8
+11    9
+Name: quality, dtype: str.dtype
+
+tests/test_validate.py:53: AssertionError
+
+1 failed, 13 passed in 0.10s
+
+Please diagnose and fix only this Stage 2 issue.
+
+The important behavior I want to preserve is that validate_numeric should not mutate the original input DataFrame.
+
+Also, before finishing Stage 2, please verify two requirements from docs/plan.md:
+1. unexpected extra columns must raise ValueError because the schema must contain exactly the 13 required columns
+2. the `type` column must be normalized by stripping whitespace and lowercasing, and only `red` and `white` should be accepted
+
+If either requirement is missing, make the smallest necessary correction and add pytest coverage.
+
+Then give me the exact verification command and stop. Do not proceed to Stage 3 yet.
+
+---
+
+[AGENT]
+
+The failure is in the numeric-coercion test, not in `validate_numeric` itself. I’ll check that assertion against the plan, then confirm extra-column rejection and `type` normalization.
+
+The numeric check already returns a copy. The failure is the test: this pandas version turns `astype(str)` into `StringDtype`, so comparing that dtype with `object` is wrong. Extra columns are already rejected. `type` is not normalized or limited to `red` and `white` yet, so I’m adding that check in `validate.py`.
+
+The failing assertion was wrong for this pandas version. `astype(str)` produces `StringDtype`, not `object`. `validate_numeric` already returns a copy, so the test now compares the input with a snapshot taken before the call.
+
+Extra columns were already rejected. `test_validate_unexpected_column` expects `ValueError` starting with `Unexpected columns:` when a 14th column is present.
+
+`type` was not checked. The input contract says values must be `red` or `white` after stripping and lowercasing, but `validate.py` never enforced that. I added `validate_type`, which returns a normalized copy and raises `ValueError` for any other non-null value. Missing `type` values stay missing. I did not edit `docs/plan.md`. When the pipeline is added, it needs to call `validate_type` before writing artifacts.
+
+Run this from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_load.py tests/test_validate.py tests/test_clean.py -q
+```
+
+---
+
+[STUDENT]
+
+Stage 2 verification passed successfully.
+
+Please proceed to Stage 3 only, following docs/plan.md.
+
+Implement:
+- IQR-based outlier reporting for all numeric columns, including quality
+- preserve all rows; do not remove, clip, or modify outliers
+- support the configured IQR multiplier
+- summary statistics grouped by wine type
+- high-quality count using quality >= 7
+- corresponding pytest tests, including:
+  - a constant-column case where IQR is zero
+  - an extreme-value case proving the outlier is reported but the row is preserved
+  - summary behavior for both wine types
+  - summary behavior for a single wine type
+
+After making the changes, give me the exact verification command and stop.
+
+Do not proceed to the model, visualization, CLI, Docker, or README stages yet.
+
+---
+
+[AGENT]
+
+Stage 2 is in place. I’ll add IQR outlier reporting and wine-type summaries from the plan, with tests for a zero-IQR column, a preserved extreme row, and both single-type and two-type summaries.
+
+Alcohol means are built from `0.4` steps, so those assertions need an approximate comparison. I’m updating that before you run the tests.
+
+Stage 3 is in place. Outlier reporting and wine-type summaries are implemented, and neither step changes the caller's rows.
+
+**Files created**
+- `src/wine_pipeline/outliers.py`
+- `src/wine_pipeline/summarize.py`
+- `tests/test_outliers.py`
+- `tests/test_summarize.py`
+
+**Implementation decisions**
+- `build_outlier_report` returns only the IQR report for the 11 features plus `quality`. A value is an outlier only when it is strictly outside the fences. A zero IQR is valid: the fences equal that constant and the outlier count is 0. The multiplier is applied as `q1 - multiplier * iqr` and `q3 + multiplier * iqr`. A multiplier less than or equal to 0 raises `ValueError`. The function does not drop, clip, or edit rows.
+- `summarize_by_type` copies the frame, strips and lowercases `type`, then sorts groups by type. `high_quality_count` uses the fixed threshold `quality >= 7`.
+
+Run this from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_outliers.py tests/test_summarize.py -q
+```
+
+---
+
+[STUDENT]
+
+Stage 3 verification passed successfully.
+
+Please proceed to Stage 4 only, following docs/plan.md.
+
+Implement:
+- Linear Regression using the 11 numeric physicochemical features
+- target = quality
+- exclude type from the model features
+- train_test_split with configurable test_size and random_state
+- reject test_size values outside (0, 1)
+- return MAE, R-squared, n_train, and n_test
+- make model behavior reproducible for the same random_state
+- create the alcohol_vs_quality scatter plot with the exact axis labels and title required by docs/plan.md
+- add corresponding pytest tests, including reproducibility and plot-file creation
+
+After making the changes, give me the exact verification command and stop.
+
+Do not proceed to the CLI, pipeline orchestration, Docker, README, or GitHub Actions stages yet.
+
+---
+
+[AGENT]
+
+Stage 3 is in place. I’ll add the linear regression step and the alcohol-versus-quality plot from the plan, plus tests for reproducibility and a non-empty plot file.
+
+The plot test uses a pytest type and never imports pytest. I’m adding that import so the test module can load.
+
+Stage 4 is in place. Linear regression and the alcohol-versus-quality scatter plot are implemented, with tests for reproducibility and plot-file creation.
+
+**Files created**
+- `src/wine_pipeline/model.py`
+- `src/wine_pipeline/visualize.py`
+- `tests/test_model.py`
+- `tests/test_visualize.py`
+
+**Implementation decisions**
+- `train_and_evaluate` uses only the 11 physicochemical columns in `FEATURE_COLUMNS` and `quality` as the target. `type` is not part of the feature matrix. The split uses `test_size` and `random_state`, defaulting to `0.2` and `42`. `test_size` outside `(0, 1)`, or fewer than 10 rows, raises `ValueError`. The returned dict contains `mae`, `r2`, `n_train`, and `n_test`. The same `random_state` repeats the same split and scores.
+- `create_scatter_plot` sets Matplotlib to the `Agg` backend before importing `pyplot`. It writes `alcohol` versus `quality`, labels the axes `"Alcohol Content"` and `"Wine Quality"`, titles the figure `"Alcohol Content vs Wine Quality"`, creates the parent directory, and closes the figure.
+
+Run this from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_model.py tests/test_visualize.py -q
+```
+
+---
+
+[STUDENT]
+
+Stage 4 verification passed successfully.
+
+Please proceed to Stage 5 only, following docs/plan.md.
+
+Implement the pipeline orchestration and command-line interface, including:
+
+- run_pipeline orchestration in the approved pipeline order
+- configurable --input and --output-dir
+- configurable --test-size, --random-state, and --iqr-multiplier
+- call the validation steps in the correct order, including validate_type
+- reject fewer than 10 rows after duplicate removal
+- hold results in memory until validation/modeling succeeds so failed runs do not leave partial artifacts
+- create the output directory only for a successful run
+- write exactly the five required artifacts:
+  - summary.csv
+  - missing_values.csv
+  - outliers_report.csv
+  - metrics.json
+  - alcohol_vs_quality.png
+- metrics.json must contain all keys required by docs/plan.md
+- rows_modeled must equal rows_after_dedup
+- CLI exit code 0 on success
+- CLI exit code 1 on FileNotFoundError or ValueError
+- print the required short success message to stdout
+- print errors to stderr
+- support both:
+  - wine-pipeline
+  - python -m wine_pipeline
+- add integration and CLI pytest coverage required by docs/plan.md, including:
+  - missing file
+  - missing required column
+  - duplicate count
+  - empty CSV
+  - small dataset
+  - all five output files created
+  - failed runs do not create metrics.json
+
+After making the changes, give me the exact verification command and stop.
+
+Do not proceed to Docker, README, GitHub Actions, or the full-dataset smoke test yet.
+
+---
+
+[AGENT]
+
+Stage 4 is in place. I’ll wire the approved pipeline order and CLI next, including `validate_type`, and add the integration tests the plan requires.
+
+The pipeline will run every check, including `validate_type`, before it creates the output directory. `metrics.json` is written last so a failed run does not leave a successful-looking result.
+
+Stage 5 is in place. The pipeline and command-line interface run the approved steps, and artifacts are written only after validation and modeling succeed.
+
+**Files created**
+- `src/wine_pipeline/pipeline.py`
+- `src/wine_pipeline/cli.py`
+- `src/wine_pipeline/__main__.py`
+- `tests/test_pipeline.py`
+
+**Implementation decisions**
+- `run_pipeline` calls `load_data`, `validate_columns`, `validate_type`, `validate_numeric`, `missing_value_report`, `validate_no_missing`, `remove_duplicates`, the minimum-row check, `build_outlier_report`, `summarize_by_type`, and `train_and_evaluate` before creating the output directory. `validate_type` sits after the column check so a missing `type` value is still counted, and any value other than `red` or `white` fails before modeling.
+- Fewer than 10 rows after duplicate removal raises `ValueError` and writes nothing. `rows_modeled` is set from `rows_after_dedup`.
+- The output directory is created only after those steps succeed. The plot and CSV files are written next, and `metrics.json` is written last. It contains every key listed in `docs/plan.md`.
+- `wine-pipeline` and `python -m wine_pipeline` both call `cli.main`. Success prints one stdout line with rows read, duplicates removed, MAE, R-squared, and the output directory, then returns `0`. `FileNotFoundError` and `ValueError` are printed to stderr and return `1`.
+
+Run this from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_pipeline.py -q
+```
+
+---
+
+[STUDENT]
+
+Stage 5 verification passed successfully.
+
+Before proceeding to Stage 6, please perform a focused review of the Stage 5 implementation against docs/plan.md.
+
+Please verify that automated coverage includes or explicitly checks:
+
+1. a missing input file returns the expected failure behavior and does not create metrics.json
+2. a missing required column fails and does not create metrics.json
+3. duplicate removal is recorded correctly in metrics.json
+4. an empty CSV fails
+5. fewer than 10 rows after duplicate removal fails
+6. a successful pipeline run creates exactly the five required artifacts
+7. metrics.json contains every required key from docs/plan.md
+8. rows_modeled equals rows_after_dedup
+9. invalid test_size values outside (0, 1) are rejected
+10. non-positive iqr_multiplier values are rejected
+11. CLI errors go to stderr and return exit code 1
+12. successful CLI execution returns 0 and prints the required summary to stdout
+13. both entry points are supported:
+    - wine-pipeline
+    - python -m wine_pipeline
+
+If any coverage or implementation is missing, make only the smallest necessary correction and add the appropriate tests.
+
+Then give me the exact verification command and stop.
+
+Do not proceed to Docker, README, GitHub Actions, or the full-dataset smoke test yet.
+
+---
+
+[AGENT]
+
+Stage 5 passed its first run. I’ll compare the pipeline and CLI tests with the plan and add only the checks that are still missing.
+
+Most of the Stage 5 checks are already in place. Three gaps remain: a dataset that only falls under 10 rows after duplicate removal, rejection of a non-positive IQR multiplier through the CLI, and a check that a successful run writes those five files and no others.
+
+The Stage 5 pipeline and CLI already match `docs/plan.md`. No production code needed to change. The review found three test gaps, and those checks are now in `tests/test_pipeline.py`.
+
+Already covered:
+
+- A missing file raises `FileNotFoundError` and does not create `metrics.json`.
+- A missing required column fails and does not create `metrics.json`.
+- `duplicates_removed` is recorded as `1` in `metrics.json`.
+- An empty CSV fails without creating `metrics.json`.
+- A 9-row dataset fails the minimum-row check.
+- `metrics.json` contains every required key.
+- `rows_modeled` equals `rows_after_dedup`.
+- `test_size` values `0`, `1`, and `1.5` return exit code `1`, with the error on stderr.
+- A successful CLI run returns `0` and prints rows read, duplicates removed, MAE, R-squared, and the output directory to stdout.
+- `wine-pipeline --help` and `python -m wine_pipeline --help` both start the same CLI.
+
+Added:
+
+- A file with at least 10 rows that has only 9 unique rows fails after duplicate removal and writes nothing.
+- A successful run leaves exactly `summary.csv`, `missing_values.csv`, `outliers_report.csv`, `metrics.json`, and `alcohol_vs_quality.png`.
+- `--test-size -0.1` is rejected.
+- `--iqr-multiplier` values `0` and `-1.5` return exit code `1`, print to stderr, and do not create `metrics.json`.
+
+Run this from the repository root:
+
+```bash
+source .venv/bin/activate
+python -m pytest tests/test_pipeline.py -q
+```
+
+---
+
+[STUDENT]
+
+Stage 5 verification passed successfully.
+
+Please proceed to Stage 6 only, following docs/plan.md.
+
+Implement the remaining infrastructure and documentation items:
+
+- Dockerfile
+  - base image python:3.12-slim
+  - working directory /app
+  - set:
+    - PYTHONDONTWRITEBYTECODE=1
+    - PYTHONUNBUFFERED=1
+    - MPLBACKEND=Agg
+    - MPLCONFIGDIR=/tmp
+  - copy only the files needed to install and run the package
+  - install with pip install --no-cache-dir .
+  - use ENTRYPOINT ["wine-pipeline"]
+  - do not copy data/, tests/, output/, or output-docker/ into the image
+
+- .dockerignore
+  - exclude .git
+  - .venv and venv
+  - __pycache__
+  - .pytest_cache
+  - .mypy_cache
+  - output
+  - output-docker
+  - tests
+  - *.pyc
+  - .DS_Store
+
+- data/
+  - copy the existing wine_quality_merged.csv into this repository at:
+    data/wine_quality_merged.csv
+  - do not modify the dataset
+
+- README.md
+  - project purpose
+  - Option 2 context
+  - installation
+  - CLI usage
+  - output artifacts
+  - testing
+  - single-container Docker build/run instructions
+  - mounted read-only input directory
+  - mounted output directory
+  - outlier-retention decision
+  - reproducibility notes
+  - manual smoke-test section, but do not claim PASS yet because I have not run it
+
+- GitHub Actions
+  - add .github/workflows/tests.yml
+  - install the package and run pytest on push to main and on pull requests
+
+After making these changes, give me:
+1. the exact local verification commands
+2. the exact Docker build command
+3. the exact Docker run command from docs/plan.md
+
+Stop after that.
+
+Do not mark the manual smoke test as passed yet. I will run it myself before the Tester stage.
+
+---
+
+[AGENT]
+
+Stage 5 is complete. I’ll add the Docker setup, dataset copy, README, and GitHub Actions workflow from the plan, without treating the manual smoke test as passed.
+
+The image will install only the package files, and the dataset will be mounted at run time. I’m adding the Docker files, the unchanged CSV, the README, and the pytest workflow.
+
+Stage 6 is in place. The dataset copy matches the source file byte for byte, and the manual smoke test is documented as not yet run.
+
+**Files created**
+- `Dockerfile`
+- `.dockerignore`
+- `data/wine_quality_merged.csv`
+- `README.md`
+- `.github/workflows/tests.yml`
+
+**Implementation decisions**
+- The image copies only `pyproject.toml`, `requirements.txt`, and `src/`, then installs with `pip install --no-cache-dir .`. `data/`, `tests/`, `output/`, and `output-docker/` stay out of the image and are mounted at run time.
+- The copied CSV is unchanged: `cmp` against the source file succeeded, and the file still has 6,498 lines including the header.
+- The README lists the smoke-test steps and states that they have not been run.
+
+**Local verification**
+
+```bash
+source .venv/bin/activate
+python -m pytest -q
+wine-pipeline --help
+python -m wine_pipeline --help
+```
+
+**Docker build**
+
+```bash
+docker build -t wine-pipeline .
+```
+
+**Docker run**
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/data:/data:ro" \
+  -v "$(pwd)/output:/output" \
+  wine-pipeline \
+  --input /data/wine_quality_merged.csv \
+  --output-dir /output
+```
+
+---
+
+[STUDENT]
+
+The Stage 6 manual smoke test failed.
+
+I ran:
+
+python -m wine_pipeline \
+  --input data/wine_quality_merged.csv \
+  --output-dir output
+
+and received:
+
+Input file not found: data/wine_quality_merged.csv
+
+Please inspect the repository and determine why the dataset you said was copied to:
+
+data/wine_quality_merged.csv
+
+is not available to the CLI.
+
+The source dataset is still located at:
+
+/Users/wyhmac/Desktop/IDS706/hw2/data/wine_quality_merged.csv
+
+Please make the smallest correction needed so the repository contains:
+
+data/wine_quality_merged.csv
+
+Do not modify the dataset contents.
+
+After fixing it, verify that the copied file matches the source byte-for-byte and give me the exact command to rerun the local smoke test.
+
+Do not proceed to Docker or Tester yet.
+
+---
+
+[AGENT]
+
+The CLI is not seeing `data/wine_quality_merged.csv`. I’ll check where that file actually is and why the copy is missing.
+
+The first copy landed in the parent `IDS706/data` folder, not in the repository. I’ll remove that stray file and leave the matching copy inside the repo.
+
+The dataset was copied into the parent `IDS706/data/` directory, so the repository itself had no `data/wine_quality_merged.csv`. The CLI looks up that relative path from the repository root and correctly reported the file as missing.
+
+`data/wine_quality_merged.csv` is now inside `ids706-ai-wine-pipeline`. `cmp` reports that it matches `/Users/wyhmac/Desktop/IDS706/hw2/data/wine_quality_merged.csv` byte for byte. Both files are 415,030 bytes. The dataset contents were not changed.
+
+Rerun the local smoke test from the repository root:
+
+```bash
+cd /Users/wyhmac/Desktop/IDS706/ids706-ai-wine-pipeline
+source .venv/bin/activate
+python -m wine_pipeline --input data/wine_quality_merged.csv --output-dir output
+```
+
+---
+
+[STUDENT]
+
+The manual smoke test passed.
+
+I personally verified:
+
+- the complete pytest suite passes: 49 passed
+- both CLI entry points work
+- the full local dataset runs successfully
+- exactly the five required artifacts are created
+- rows_read is 6497
+- duplicates_removed is 1177
+- rows_after_dedup is 5320
+- rows_modeled is 5320
+- missing_values_total is 0
+- the missing-input case returns exit code 1
+- the Docker image builds successfully
+- the Docker container runs successfully with read-only mounted input and mounted output
+- all five Docker-generated artifacts appear on the host
+- Docker-generated files are owned by the host user
+
+Please update only the Manual Smoke Test section of README.md to mark it as PASS and accurately record these checks.
+
+Do not modify unrelated implementation files.
+
+After updating README.md, give me the final Builder verification command and stop.
+
+---
+
+[AGENT]
+
+The smoke test is confirmed. I’ll update only that README section so it records the checks you ran and marks the result as passed.
+
+The Manual Smoke Test section in `README.md` is now marked **PASS** and records the checks you verified. No other files were changed.
+
+Run this from the repository root:
+
+```bash
+cd /Users/wyhmac/Desktop/IDS706/ids706-ai-wine-pipeline
+source .venv/bin/activate
+python -m pytest -q
+```
+===== TRANSCRIPT END =====

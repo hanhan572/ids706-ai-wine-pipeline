@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wine-pipeline"
+version = "0.1.0"
+description = "Command-line pipeline for merged red and white wine quality data."
+requires-python = ">=3.12"
+dependencies = [
+    "pandas",
+    "matplotlib",
+    "scikit-learn",
+]
+
+[project.scripts]
+wine-pipeline = "wine_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
