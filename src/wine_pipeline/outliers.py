@@ -1,5 +1,7 @@
 """IQR outlier counts. Rows are reported and kept."""
 
+import math
+
 import pandas as pd
 
 from wine_pipeline.schema import NUMERIC_COLUMNS
@@ -19,9 +21,10 @@ def build_outlier_report(df: pd.DataFrame, multiplier: float = 1.5) -> pd.DataFr
     """Count IQR outliers for each numeric column, including quality.
 
     The caller's frame is not filtered, clipped, or otherwise modified.
-    A multiplier less than or equal to zero raises ``ValueError``.
+    A non-finite multiplier, or one less than or equal to zero, raises
+    ``ValueError``.
     """
-    if multiplier <= 0:
+    if not math.isfinite(multiplier) or multiplier <= 0:
         raise ValueError(f"iqr_multiplier must be greater than 0, got {multiplier}")
 
     rows: list[dict[str, object]] = []

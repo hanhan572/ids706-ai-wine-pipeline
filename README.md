@@ -101,7 +101,7 @@ The image contains the installed package. It does not contain `data/`, `tests/`,
 docker run --rm \
   --user "$(id -u):$(id -g)" \
   -v "$(pwd)/data:/data:ro" \
-  -v "$(pwd)/output:/output" \
+  -v "$(pwd)/output-docker:/output" \
   wine-pipeline \
   --input /data/wine_quality_merged.csv \
   --output-dir /output
@@ -117,7 +117,7 @@ The default split is `test_size=0.2` and `random_state=42`. Both values are stor
 
 **Status: PASS.** These checks were run manually against the current tree. The counts below are sanity checks for `data/wine_quality_merged.csv`, not unit-test oracles.
 
-- `python -m pytest -q` passed: 49 tests.
+- `python -m pytest -q` passed: 51 tests.
 - `wine-pipeline` and `python -m wine_pipeline` both start.
 - `python -m wine_pipeline --input data/wine_quality_merged.csv --output-dir output` completed successfully.
 - The run wrote exactly these five files: `summary.csv`, `missing_values.csv`, `outliers_report.csv`, `metrics.json`, and `alcohol_vs_quality.png`.
@@ -126,3 +126,19 @@ The default split is `test_size=0.2` and `random_state=42`. Both values are stor
 - `docker build -t wine-pipeline .` succeeded.
 - The container ran with the dataset mounted read-only and the output directory mounted from the host.
 - All five Docker-generated artifacts appeared on the host, and those files are owned by the host user.
+
+## AI-assisted development reflection
+
+This repository used three separate AI-assisted roles: Architect, Builder, and Tester.
+
+The Architect helped redesign the previous single-script wine analysis as a modular command-line pipeline and produced the implementation plan in `docs/plan.md`.
+
+The Builder implemented the package structure, validation, duplicate handling, outlier reporting, summary analysis, linear regression, tests, Docker configuration, GitHub Actions workflow, and documentation. I independently ran the verification commands after each stage and reported failures back to the Builder.
+
+The Tester independently compared the implementation against `docs/plan.md`. I accepted its finding that type normalization occurred too early and could change exact-duplicate identity. The implementation was corrected so exact duplicate removal occurs before type normalization.
+
+I modified one part of the Tester's recommendation rather than accepting it directly. The Tester initially recommended removing type validation entirely. Because the input contract specifies normalized red and white wine types, I kept type validation but moved it until after duplicate removal.
+
+I also accepted the recommendation to reject non-finite IQR multipliers such as NaN.
+
+Independent verification included the full pytest suite, the full wine dataset, CLI failure behavior, Docker image creation, container execution with mounted input and output directories, and inspection of the generated artifacts. The final independent Tester review found no remaining blocker.

@@ -52,6 +52,29 @@ def test_pipeline_missing_value(tmp_path: Path, missing_value_wine_df: pd.DataFr
     assert not output_dir.exists()
 
 
+def test_pipeline_keeps_type_case_variants_until_summary(
+    tmp_path: Path,
+    sample_wine_df: pd.DataFrame,
+) -> None:
+    frame = sample_wine_df.copy()
+    extra = frame.iloc[[0]].copy()
+    extra.loc[extra.index[0], "type"] = "Red"
+    combined = pd.concat([frame, extra], ignore_index=True)
+    source = _write_frame(combined, tmp_path / "wine.csv")
+    output_dir = tmp_path / "output"
+
+    run_pipeline(source, output_dir)
+
+    metrics = json.loads(_metrics_path(output_dir).read_text())
+    assert metrics["duplicates_removed"] == 0
+    assert metrics["rows_after_dedup"] == 13
+    assert metrics["rows_modeled"] == 13
+    summary = pd.read_csv(output_dir / "summary.csv")
+    red = summary.loc[summary["type"] == "red"]
+    assert len(red) == 1
+    assert int(red["count"].iloc[0]) == 7
+
+
 def test_pipeline_rejects_invalid_type(tmp_path: Path, sample_wine_df: pd.DataFrame) -> None:
     frame = sample_wine_df.copy()
     frame.loc[0, "type"] = "rose"
@@ -245,6 +268,30 @@ def test_cli_rejects_non_positive_iqr_multiplier(
     assert "iqr_multiplier" in captured.err
     assert not _metrics_path(output_dir).exists()
     assert not output_dir.exists()
+
+
+def test_cli_rejects_nan_iqr_multiplier(
+    tmp_path: Path,
+    sample_wine_df: pd.DataFrame,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = _write_frame(sample_wine_df, tmp_path / "wine.csv")
+    output_dir = tmp_path / "output"
+    code = main(
+        [
+            "--input",
+            str(source),
+            "--output-dir",
+            str(output_dir),
+            "--iqr-multiplier",
+            "nan",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 1
+    assert captured.out == ""
+    assert "iqr_multiplier" in captured.err
+    assert not _metrics_path(output_dir).exists()
 
 
 def test_module_and_script_help() -> None:

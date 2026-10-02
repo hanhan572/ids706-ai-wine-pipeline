@@ -44,14 +44,14 @@ def run_pipeline(
 ) -> dict:
     """Load, validate, summarize, and model a wine CSV, then write artifacts.
 
-    ``validate_type`` runs after the column check and before numeric coercion
-    so missing type values can still be counted. Nothing is written until
-    validation, duplicate removal, the minimum-row check, and modeling succeed.
+    Exact duplicates are removed before ``validate_type``, so type case and
+    whitespace do not change row identity. Missing type values are counted
+    earlier, on the original column. Nothing is written until validation,
+    duplicate removal, the minimum-row check, and modeling succeed.
     """
     frame = load_data(input_path)
     rows_read = len(frame)
     validate_columns(frame)
-    frame = validate_type(frame)
     frame = validate_numeric(frame)
     missing_report = missing_value_report(frame)
     validate_no_missing(missing_report)
@@ -61,6 +61,7 @@ def run_pipeline(
         raise ValueError(
             f"Need at least {MIN_ROWS} rows after duplicate removal, got {rows_after_dedup}"
         )
+    frame = validate_type(frame)
 
     outlier_report = build_outlier_report(frame, multiplier=iqr_multiplier)
     summary = summarize_by_type(frame)
